@@ -1,0 +1,49 @@
+name: send-batch
+
+on:
+  schedule:
+    # Every 30 minutes between 13:00 and 22:00 UTC weekdays (= 9 AM - 6 PM ET).
+    - cron: "0,30 13-22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Max emails for this run (overrides PER_RUN_CAP)"
+        required: false
+        default: "6"
+      dry:
+        description: "Dry run (render only, don't send)"
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: nova-send
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Install deps
+        run: npm ci
+      - name: Send batch
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          APP_URL: ${{ vars.APP_URL }}
+          FROM_EMAIL: ${{ vars.FROM_EMAIL }}
+          FROM_NAME: ${{ vars.FROM_NAME }}
+          REPLY_TO: ${{ vars.REPLY_TO }}
+          COMPLIANCE_ADDRESS: ${{ vars.COMPLIANCE_ADDRESS }}
+          DAILY_SEND_CAP: ${{ vars.DAILY_SEND_CAP }}
+          PER_RUN_CAP: ${{ github.event.inputs.limit || vars.PER_RUN_CAP }}
+        run: |
+          if [ "${{ github.event.inputs.dry }}" = "true" ]; then
+            npx tsx scripts/send-batch.ts --dry --limit ${{ github.event.inputs.limit || '6' }}
+          else
+            npx tsx scripts/send-batch.ts --limit ${{ github.event.inputs.limit || '6' }}
+          fi
