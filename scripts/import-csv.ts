@@ -85,7 +85,7 @@ async function main() {
     const email = pickKey(r, ["email", "email_address"]);
     const firstName = pickKey(r, ["first_name", "firstname", "first"]);
     const lastName = pickKey(r, ["last_name", "lastname", "last"]);
-    const fullName = pickKey(r, ["full_name", "name"]) ?? [firstName, lastName].filter(Boolean).join(" ") || null;
+    const fullName = pickKey(r, ["full_name", "name"]) ?? ([firstName, lastName].filter(Boolean).join(" ") || null);
     const phone = pickKey(r, ["phone", "phone_number", "mobile", "cell"]);
     const brokerage = pickKey(r, ["brokerage", "company", "agency_name"]);
     const agency = pickKey(r, ["agency"]);
