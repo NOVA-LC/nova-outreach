@@ -1,0 +1,48 @@
+name: scrape-phones
+
+# Outscraper Google Maps run. Pulls life-insurance-agency listings (with phone
+# numbers) for a rotating slice of US metros. Writes to public.outreach_agents
+# and adds phone-only synthetic emails to outreach_suppressions so the email
+# batcher never tries to deliver to them.
+#
+# Default cap = 500 records per run → ~$1.50 at Outscraper's $3/1k rate.
+# Tune via the workflow_dispatch `limit` input or env vars on the run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Hard cap on records this run (default 500)"
+        required: false
+        default: "500"
+      cities_per_run:
+        description: "Distinct metros to query (default 10)"
+        required: false
+        default: "10"
+      limit_per_query:
+        description: "Outscraper records per query (default 50)"
+        required: false
+        default: "50"
+  schedule:
+    # Weekly run, Sunday 07:00 UTC. Phone enrichment doesn't need to be daily.
+    - cron: "0 7 * * 0"
+
+jobs:
+  scrape-phones:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Install deps
+        run: npm install --no-audit --no-fund --silent
+      - name: Run Outscraper phone scrape
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OUTSCRAPER_API_KEY: ${{ secrets.OUTSCRAPER_API_KEY }}
+          OUTSCRAPER_LIMIT_PER_QUERY: ${{ github.event.inputs.limit_per_query || '50' }}
+          OUTSCRAPER_CITIES_PER_RUN: ${{ github.event.inputs.cities_per_run || '10' }}
+          SCRAPE_PHONES_LIMIT: ${{ github.event.inputs.limit || '500' }}
+        run: npx tsx scripts/scrape-phones.ts --limit ${{ github.event.inputs.limit || '500' }}
