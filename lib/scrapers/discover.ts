@@ -25,8 +25,10 @@ const STATES = [
 ];
 
 function todaysStates(): string[] {
+  // Bootstrap mode: hit ALL states in one run. Daily cron should
+  // re-narrow to 3/day to avoid burning Brave quota — see DAILY_MODE flag.
+  if (process.env.SCRAPE_ALL_STATES === "true") return STATES.slice();
   const day = new Date().getUTCDate();
-  // Pick 3 states per day in rotating order so we cover all in ~6 days.
   const start = (day * 3) % STATES.length;
   return [
     STATES[start],
