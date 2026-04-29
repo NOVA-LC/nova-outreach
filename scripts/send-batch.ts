@@ -1,16 +1,24 @@
 #!/usr/bin/env tsx
 /**
- * CLI version of /api/cron/send-batch — runnable from GitHub Actions or locally.
+ * Direct-Postgres CLI sender.
  *
- * Usage:
- *   tsx scripts/send-batch.ts            # send up to PER_RUN_CAP from active campaign
- *   tsx scripts/send-batch.ts --dry      # render but don't send
- *   tsx scripts/send-batch.ts --limit 5  # override per-run cap
+ * Reads/writes Supabase via the `pg` driver — no PostgREST in the path.
+ * That removes an entire class of failures (schema cache, exposed-schemas,
+ * RLS, "Accept-Profile", etc).
  *
- * Env required: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, RESEND_API_KEY,
- * APP_URL, FROM_EMAIL, FROM_NAME, REPLY_TO, COMPLIANCE_ADDRESS, DAILY_SEND_CAP, PER_RUN_CAP
+ * Env required:
+ *   DATABASE_URL                Postgres connection string (Supabase Transaction Pooler URI)
+ *   RESEND_API_KEY              Resend API key
+ *   APP_URL                     Public URL used for tracking + unsubscribe links
+ *   FROM_EMAIL, FROM_NAME, REPLY_TO
+ *   COMPLIANCE_ADDRESS          Physical address for CAN-SPAM footer
+ *   DAILY_SEND_CAP, PER_RUN_CAP
+ *
+ * Flags:
+ *   --limit N    override PER_RUN_CAP for this run
+ *   --dry        render but don't actually send
  */
-import { createClient } from "@supabase/supabase-js";
+import { Client } from "pg";
 import { Resend } from "resend";
 import { renderHtml, renderText } from "../lib/email/render";
 import { pickSubject } from "../lib/email/subjects";
@@ -22,8 +30,7 @@ function envOrDie(name: string): string {
   return v;
 }
 
-const SUPABASE_URL = envOrDie("SUPABASE_URL");
-const SUPABASE_SERVICE_ROLE_KEY = envOrDie("SUPABASE_SERVICE_ROLE_KEY");
+const DATABASE_URL = envOrDie("DATABASE_URL");
 const RESEND_API_KEY = envOrDie("RESEND_API_KEY");
 const APP_URL = envOrDie("APP_URL");
 const FROM_EMAIL = envOrDie("FROM_EMAIL");
@@ -37,177 +44,173 @@ const DRY = args.includes("--dry");
 const limitFlagIdx = args.indexOf("--limit");
 if (limitFlagIdx !== -1) PER_RUN_CAP = parseInt(args[limitFlagIdx + 1] ?? "6", 10);
 
-const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false },
-});
 const resend = new Resend(RESEND_API_KEY);
 
 async function main() {
-  const today = new Date().toISOString().slice(0, 10);
+  const sb = new Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  await sb.connect();
+  console.log("[boot] connected to Postgres directly");
 
-  const { data: meterRow } = await sb
-    .from("outreach_send_meter")
-    .select("sent")
-    .eq("date", today)
-    .eq("channel", "email")
-    .maybeSingle();
-  const sentToday = meterRow?.sent ?? 0;
-  const remainingToday = DAILY_SEND_CAP - sentToday;
-  if (remainingToday <= 0) {
-    console.log(`Daily cap hit (${sentToday}/${DAILY_SEND_CAP}). Exiting.`);
-    return;
-  }
-  const batchSize = Math.min(PER_RUN_CAP, remainingToday);
-
-  // Boot probe — bypass supabase-js, do a raw fetch so we see the actual HTTP status.
-  const probeUrl = `${SUPABASE_URL}/rest/v1/outreach_campaigns?select=id&limit=1`;
-  console.log(`[boot probe] GET ${probeUrl}`);
-  console.log(`[boot probe] SUPABASE_URL length=${SUPABASE_URL.length}, key prefix=${SUPABASE_SERVICE_ROLE_KEY.slice(0,20)}...`);
   try {
-    const r = await fetch(probeUrl, {
-      headers: {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-      },
-    });
-    const body = await r.text();
-    console.log(`[boot probe] HTTP ${r.status} ${r.statusText}`);
-    console.log(`[boot probe] body: ${body.slice(0, 500)}`);
-    if (!r.ok) {
-      console.error(`Boot probe failed with HTTP ${r.status}. Most common causes:`);
-      console.error("  401 → wrong SUPABASE_SERVICE_ROLE_KEY in GitHub secrets");
-      console.error("  404 → wrong SUPABASE_URL in GitHub variables");
-      console.error("  schema not exposed → add 'public' to Supabase Data API exposed schemas (it should be there by default)");
+    const today = new Date().toISOString().slice(0, 10);
+
+    // 1. Today's send count.
+    const meterResult = await sb.query<{ sent: number }>(
+      `SELECT sent FROM public.outreach_send_meter WHERE date = $1 AND channel = 'email'`,
+      [today],
+    );
+    const sentToday = meterResult.rows[0]?.sent ?? 0;
+    const remainingToday = DAILY_SEND_CAP - sentToday;
+    if (remainingToday <= 0) {
+      console.log(`Daily cap hit (${sentToday}/${DAILY_SEND_CAP}). Exiting.`);
+      return;
+    }
+    const batchSize = Math.min(PER_RUN_CAP, remainingToday);
+
+    // 2. Active campaign.
+    const campResult = await sb.query<{
+      id: string; name: string; channel: string;
+    }>(
+      `SELECT id, name, channel FROM public.outreach_campaigns
+       WHERE active = true AND channel = 'email'
+       ORDER BY created_at DESC LIMIT 1`,
+    );
+    const campaign = campResult.rows[0];
+    if (!campaign) {
+      console.error("No active email campaign in public.outreach_campaigns. Insert one first.");
       process.exit(1);
     }
-  } catch (e: any) {
-    console.error(`[boot probe] fetch threw:`, e?.message ?? e);
-    console.error("DNS or network error — verify SUPABASE_URL exactly matches https://sqsaixsqxavcfklovkbw.supabase.co");
-    process.exit(1);
-  }
+    console.log(`[campaign] ${campaign.name} (${campaign.id})`);
 
-  const { data: campaign, error: campaignErr } = await sb
-    .from("outreach_campaigns")
-    .select("*")
-    .eq("active", true)
-    .eq("channel", "email")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (campaignErr) {
-    console.error("Campaign query error:", JSON.stringify(campaignErr, null, 2));
-    process.exit(1);
-  }
-  if (!campaign) {
-    console.error("No active email campaign. Run this in Supabase SQL editor:");
-    console.error("  SELECT id, name, active, channel FROM outreach.campaigns;");
-    console.error("If empty: re-insert via the migration. If rows present but query empty: schema visibility issue.");
-    process.exit(1);
-  }
-  console.log(`[campaign] ${campaign.name} (${campaign.id})`);
-
-  // Eligible candidates
-  const { data: agents } = await sb
-    .from("outreach_agents")
-    .select("id, email, first_name, brokerage, state")
-    .eq("excluded", false)
-    .is("unsubscribed_at", null)
-    .is("hard_bounced_at", null)
-    .is("complained_at", null)
-    .limit(batchSize * 5);
-  if (!agents || agents.length === 0) {
-    console.log("No eligible agents.");
-    return;
-  }
-
-  const { data: alreadySent } = await sb
-    .from("outreach_sends")
-    .select("agent_id")
-    .eq("campaign_id", campaign.id)
-    .in("agent_id", agents.map((a) => a.id));
-  const sentSet = new Set((alreadySent ?? []).map((r: any) => r.agent_id));
-
-  const emails = agents.map((a) => a.email.toLowerCase().trim());
-  const { data: supps } = await sb
-    .from("outreach_suppressions")
-    .select("email_normalized")
-    .in("email_normalized", emails);
-  const suppSet = new Set((supps ?? []).map((s: any) => s.email_normalized));
-
-  const candidates = agents
-    .filter((a: any) => !sentSet.has(a.id) && !suppSet.has(a.email.toLowerCase().trim()))
-    .slice(0, batchSize);
-
-  console.log(`Candidates: ${candidates.length} / batch size ${batchSize}`);
-
-  let sent = 0;
-  for (const agent of candidates) {
-    const v = await verifyEmail(agent.email);
-    if (!v.ok) {
-      console.log(`SKIP ${agent.email}: verify_failed:${v.reason}`);
-      await sb.from("outreach_agents").update({ excluded: true, excluded_reason: `invalid_email_${v.reason}` }).eq("id", agent.id);
-      continue;
-    }
-
-    const { data: sendRow, error: insErr } = await sb
-      .from("outreach_sends")
-      .insert({ agent_id: agent.id, campaign_id: campaign.id, channel: "email", status: "queued" })
-      .select("id, track_token")
-      .single();
-    if (insErr || !sendRow) {
-      console.error(`Insert failed for ${agent.email}: ${insErr?.message}`);
-      continue;
-    }
-
-    const trackUrl = `${APP_URL}/api/t/${sendRow.track_token}`;
-    const unsubUrl = `${APP_URL}/api/u/${sendRow.track_token}`;
-    const html = renderHtml({ firstName: agent.first_name, brokerage: agent.brokerage, state: agent.state, trackUrl, unsubUrl });
-    const text = renderText({ firstName: agent.first_name, brokerage: agent.brokerage, state: agent.state, trackUrl, unsubUrl });
-    const subject = pickSubject(sendRow.id);
-
-    if (DRY) {
-      console.log(`[DRY] ${agent.email} :: ${subject}\n${text}\n---`);
-      await sb.from("outreach_sends").update({ status: "failed", error: "dry_run" }).eq("id", sendRow.id);
-      continue;
-    }
-
-    try {
-      const result = await resend.emails.send({
-        from: `${FROM_NAME} <${FROM_EMAIL}>`,
-        to: [agent.email],
-        subject,
-        html,
-        text,
-        replyTo: REPLY_TO,
-        headers: {
-          "List-Unsubscribe": `<${unsubUrl}>, <mailto:${REPLY_TO}?subject=unsubscribe>`,
-          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-        },
-        tags: [
-          { name: "campaign", value: campaign.id.slice(0, 8) },
-          { name: "track", value: sendRow.track_token },
-        ],
-      });
-      if (result.error) throw new Error(result.error.message ?? JSON.stringify(result.error));
-      const messageId = result.data?.id;
-      await sb.from("outreach_sends").update({
-        provider_message_id: messageId, status: "sent", sent_at: new Date().toISOString(),
-      }).eq("id", sendRow.id);
-      console.log(`SENT ${agent.email} (${messageId})`);
-      sent++;
-    } catch (e: any) {
-      console.error(`FAIL ${agent.email}: ${e.message}`);
-      await sb.from("outreach_sends").update({ status: "failed", error: e.message }).eq("id", sendRow.id);
-    }
-  }
-
-  if (sent > 0 && !DRY) {
-    await sb.from("outreach_send_meter").upsert(
-      { date: today, channel: "email", sent: sentToday + sent },
-      { onConflict: "date,channel" },
+    // 3. Eligible candidates: not excluded, not unsubscribed, not bounced,
+    //    not in suppressions, no existing send for this campaign.
+    const candResult = await sb.query<{
+      id: string; email: string; first_name: string | null; brokerage: string | null; state: string | null;
+    }>(
+      `
+      SELECT a.id, a.email, a.first_name, a.brokerage, a.state
+      FROM public.outreach_agents a
+      WHERE a.excluded = false
+        AND a.unsubscribed_at IS NULL
+        AND a.hard_bounced_at IS NULL
+        AND a.complained_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM public.outreach_sends s
+          WHERE s.agent_id = a.id AND s.campaign_id = $1
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM public.outreach_suppressions sup
+          WHERE sup.email_normalized = a.email_normalized
+        )
+      ORDER BY a.scraped_at ASC
+      LIMIT $2
+      `,
+      [campaign.id, batchSize],
     );
+    const candidates = candResult.rows;
+    console.log(`[candidates] ${candidates.length} (cap ${batchSize})`);
+
+    if (candidates.length === 0) {
+      console.log("No eligible agents. Either queue is empty or everyone has been emailed.");
+      return;
+    }
+
+    let sent = 0;
+    for (const agent of candidates) {
+      // Last-chance email verification (DNS MX).
+      const v = await verifyEmail(agent.email);
+      if (!v.ok) {
+        console.log(`SKIP ${agent.email}: verify_failed:${v.reason}`);
+        await sb.query(
+          `UPDATE public.outreach_agents SET excluded = true, excluded_reason = $2 WHERE id = $1`,
+          [agent.id, `invalid_email_${v.reason}`],
+        );
+        continue;
+      }
+
+      // Insert send row, get track_token.
+      const insResult = await sb.query<{ id: string; track_token: string }>(
+        `INSERT INTO public.outreach_sends (agent_id, campaign_id, channel, status)
+         VALUES ($1, $2, 'email', 'queued')
+         RETURNING id, track_token`,
+        [agent.id, campaign.id],
+      );
+      const sendRow = insResult.rows[0];
+
+      const trackUrl = `${APP_URL}/api/t/${sendRow.track_token}`;
+      const unsubUrl = `${APP_URL}/api/u/${sendRow.track_token}`;
+      const html = renderHtml({
+        firstName: agent.first_name,
+        brokerage: agent.brokerage,
+        state: agent.state,
+        trackUrl, unsubUrl,
+      });
+      const text = renderText({
+        firstName: agent.first_name,
+        brokerage: agent.brokerage,
+        state: agent.state,
+        trackUrl, unsubUrl,
+      });
+      const subject = pickSubject(sendRow.id);
+
+      if (DRY) {
+        console.log(`[DRY] ${agent.email} :: ${subject}\n${text}\n---`);
+        await sb.query(
+          `UPDATE public.outreach_sends SET status = 'failed', error = 'dry_run' WHERE id = $1`,
+          [sendRow.id],
+        );
+        continue;
+      }
+
+      try {
+        const result = await resend.emails.send({
+          from: `${FROM_NAME} <${FROM_EMAIL}>`,
+          to: [agent.email],
+          subject,
+          html,
+          text,
+          replyTo: REPLY_TO,
+          headers: {
+            "List-Unsubscribe": `<${unsubUrl}>, <mailto:${REPLY_TO}?subject=unsubscribe>`,
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+          },
+          tags: [
+            { name: "campaign", value: campaign.id.slice(0, 8) },
+            { name: "track", value: sendRow.track_token },
+          ],
+        });
+        if (result.error) throw new Error(result.error.message ?? JSON.stringify(result.error));
+        const messageId = result.data?.id;
+
+        await sb.query(
+          `UPDATE public.outreach_sends
+           SET provider_message_id = $2, status = 'sent', sent_at = now()
+           WHERE id = $1`,
+          [sendRow.id, messageId],
+        );
+        console.log(`SENT ${agent.email} (${messageId})`);
+        sent++;
+      } catch (e: any) {
+        console.error(`FAIL ${agent.email}: ${e.message}`);
+        await sb.query(
+          `UPDATE public.outreach_sends SET status = 'failed', error = $2 WHERE id = $1`,
+          [sendRow.id, e.message ?? String(e)],
+        );
+      }
+    }
+
+    if (sent > 0 && !DRY) {
+      await sb.query(
+        `INSERT INTO public.outreach_send_meter (date, channel, sent)
+         VALUES ($1, 'email', $2)
+         ON CONFLICT (date, channel) DO UPDATE SET sent = public.outreach_send_meter.sent + EXCLUDED.sent`,
+        [today, sent],
+      );
+    }
+    console.log(`Sent ${sent}. Today total: ${sentToday + sent}/${DAILY_SEND_CAP}`);
+  } finally {
+    await sb.end();
   }
-  console.log(`Sent ${sent}. Today total: ${sentToday + sent}/${DAILY_SEND_CAP}`);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
