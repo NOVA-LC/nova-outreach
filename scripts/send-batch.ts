@@ -59,15 +59,32 @@ async function main() {
   }
   const batchSize = Math.min(PER_RUN_CAP, remainingToday);
 
-  // Boot probe — explicit schema read so we get a useful error if PostgREST can't see outreach.
-  const probe = await sb.from("outreach_campaigns").select("id", { count: "exact", head: true });
-  if (probe.error) {
-    console.error("[BOOT PROBE FAILED] outreach schema not reachable via PostgREST.");
-    console.error("Error:", JSON.stringify(probe.error, null, 2));
-    console.error("Fix: Supabase Dashboard → Settings → Data API → Exposed schemas → add 'outreach' → Save.");
+  // Boot probe — bypass supabase-js, do a raw fetch so we see the actual HTTP status.
+  const probeUrl = `${SUPABASE_URL}/rest/v1/outreach_campaigns?select=id&limit=1`;
+  console.log(`[boot probe] GET ${probeUrl}`);
+  console.log(`[boot probe] SUPABASE_URL length=${SUPABASE_URL.length}, key prefix=${SUPABASE_SERVICE_ROLE_KEY.slice(0,20)}...`);
+  try {
+    const r = await fetch(probeUrl, {
+      headers: {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+    });
+    const body = await r.text();
+    console.log(`[boot probe] HTTP ${r.status} ${r.statusText}`);
+    console.log(`[boot probe] body: ${body.slice(0, 500)}`);
+    if (!r.ok) {
+      console.error(`Boot probe failed with HTTP ${r.status}. Most common causes:`);
+      console.error("  401 → wrong SUPABASE_SERVICE_ROLE_KEY in GitHub secrets");
+      console.error("  404 → wrong SUPABASE_URL in GitHub variables");
+      console.error("  schema not exposed → add 'public' to Supabase Data API exposed schemas (it should be there by default)");
+      process.exit(1);
+    }
+  } catch (e: any) {
+    console.error(`[boot probe] fetch threw:`, e?.message ?? e);
+    console.error("DNS or network error — verify SUPABASE_URL exactly matches https://sqsaixsqxavcfklovkbw.supabase.co");
     process.exit(1);
   }
-  console.log(`[boot probe] outreach.campaigns reachable; row count=${probe.count}`);
 
   const { data: campaign, error: campaignErr } = await sb
     .from("outreach_campaigns")
