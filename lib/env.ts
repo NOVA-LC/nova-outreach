@@ -9,19 +9,21 @@ function opt(name: string, fallback = ""): string {
 }
 
 export const env = {
+  // Required for any send (CLI or Vercel)
   SUPABASE_URL: req("SUPABASE_URL"),
   SUPABASE_SERVICE_ROLE_KEY: req("SUPABASE_SERVICE_ROLE_KEY"),
   RESEND_API_KEY: req("RESEND_API_KEY"),
+  APP_URL: req("APP_URL"),
+  FROM_EMAIL: req("FROM_EMAIL"),
+
+  // Optional — only needed by Vercel routes (CRON_SECRET, RESEND_WEBHOOK_SECRET,
+  // SCRAPE_SECRET) or have sensible defaults. CLI runs in GitHub Actions don't need them.
+  CRON_SECRET: opt("CRON_SECRET"),
+  SCRAPE_SECRET: opt("SCRAPE_SECRET"),
   RESEND_WEBHOOK_SECRET: opt("RESEND_WEBHOOK_SECRET"),
 
-  APP_URL: req("APP_URL"),
-  CRON_SECRET: req("CRON_SECRET"),
-  SCRAPE_SECRET: opt("SCRAPE_SECRET"),
-
-  FROM_EMAIL: req("FROM_EMAIL"),
   FROM_NAME: opt("FROM_NAME", "Tyler"),
   REPLY_TO: opt("REPLY_TO", "tyler@gonenova.com"),
-
   COMPLIANCE_ADDRESS: opt("COMPLIANCE_ADDRESS", "Nova Intel, Atlanta, GA"),
 
   DAILY_SEND_CAP: parseInt(opt("DAILY_SEND_CAP", "100"), 10),
