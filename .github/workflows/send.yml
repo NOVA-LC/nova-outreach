@@ -1,8 +1,15 @@
 name: send-batch
 
 on:
+  # Two trigger paths:
+  #   1) repository_dispatch — fired by Supabase pg_cron every 30 min via the
+  #      GitHub API. Reliable; not subject to GitHub free-tier scheduled-cron
+  #      best-effort drops. This is the primary path.
+  #   2) schedule — backup, runs on GitHub's best-effort cron. If pg_cron is
+  #      down or the PAT expires, the workflow still fires on schedule.
+  repository_dispatch:
+    types: [send-now]
   schedule:
-    # Every 30 minutes between 13:00 and 22:00 UTC weekdays (= 9 AM - 6 PM ET).
     - cron: "0,30 13-22 * * 1-5"
   workflow_dispatch:
     inputs:
