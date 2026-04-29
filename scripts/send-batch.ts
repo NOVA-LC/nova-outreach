@@ -13,7 +13,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
 import { renderHtml, renderText } from "../lib/email/render";
-import { pickSubject } from "../lib/email/subjects";
+import { renderSubject } from "../lib/email/render";
 import { verifyEmail } from "../lib/email/verify";
 
 function envOrDie(name: string): string {
@@ -149,9 +149,9 @@ async function main() {
     // otherwise mailto: fallback. If no /unsubscribe route exists, the List-Unsubscribe header
     // (handled by Gmail's one-click) is still in place from lib/resend.ts.
     const unsubUrl = `mailto:${REPLY_TO}?subject=unsubscribe%20${encodeURIComponent(sendRow.track_token)}`;
-    const html = renderHtml({ firstName: agent.first_name, brokerage: agent.brokerage, state: agent.state, trackUrl, unsubUrl });
-    const text = renderText({ firstName: agent.first_name, brokerage: agent.brokerage, state: agent.state, trackUrl, unsubUrl });
-    const subject = pickSubject(sendRow.id);
+    const html = renderHtml({ firstName: agent.first_name, brokerage: agent.brokerage, state: agent.state, trackUrl, unsubUrl, variantSeed: sendRow.id });
+    const text = renderText({ firstName: agent.first_name, brokerage: agent.brokerage, state: agent.state, trackUrl, unsubUrl, variantSeed: sendRow.id });
+    const subject = renderSubject(sendRow.id);
 
     if (DRY) {
       console.log(`[DRY] ${agent.email} :: ${subject}\n${text}\n---`);
