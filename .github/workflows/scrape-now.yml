@@ -1,0 +1,25 @@
+# One-shot bootstrap workflow — runs the scrape on every push to main while it
+# exists. Once we've populated the agent list, this file should be deleted so
+# we don't scrape on every code change.
+name: scrape-agents-now
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/scrape-now.yml]
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm install --no-audit --no-fund --silent
+      - name: Run scrapers
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
+        run: npx tsx scripts/scrape.ts
