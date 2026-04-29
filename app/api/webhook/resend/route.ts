@@ -127,7 +127,7 @@ export async function POST(req: NextRequest) {
 
 async function getCount(sb: ReturnType<typeof db>, sendId: string, col: string): Promise<number> {
   const { data } = await sb.from("sends").select(col).eq("id", sendId).maybeSingle();
-  return (data?.[col] as number) ?? 0;
+  return ((data as any)?.[col] as number) ?? 0;
 }
 
 async function isStatusBefore(sb: ReturnType<typeof db>, sendId: string, target: string): Promise<boolean> {
