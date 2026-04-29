@@ -15,7 +15,6 @@ function envOrDie(name: string): string {
 
 const sb = createClient(envOrDie("SUPABASE_URL"), envOrDie("SUPABASE_SERVICE_ROLE_KEY"), {
   auth: { persistSession: false },
-  db: { schema: "outreach" },
 });
 
 async function main() {
@@ -54,7 +53,7 @@ async function main() {
     });
 
     const { error, count } = await sb
-      .from("agents")
+      .from("outreach_agents")
       .upsert(records, { onConflict: "email_normalized", ignoreDuplicates: true, count: "exact" });
     if (error) {
       console.error(`  upsert error: ${error.message}`);
@@ -64,7 +63,7 @@ async function main() {
   }
 
   const { count: eligible } = await sb
-    .from("agents")
+    .from("outreach_agents")
     .select("id", { count: "exact", head: true })
     .eq("excluded", false);
   console.log(`Total eligible agents now: ${eligible}`);

@@ -39,7 +39,6 @@ if (limitFlagIdx !== -1) PER_RUN_CAP = parseInt(args[limitFlagIdx + 1] ?? "6", 1
 
 const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
-  db: { schema: "outreach" },
 });
 const resend = new Resend(RESEND_API_KEY);
 
@@ -47,7 +46,7 @@ async function main() {
   const today = new Date().toISOString().slice(0, 10);
 
   const { data: meterRow } = await sb
-    .from("send_meter")
+    .from("outreach_send_meter")
     .select("sent")
     .eq("date", today)
     .eq("channel", "email")
@@ -61,7 +60,7 @@ async function main() {
   const batchSize = Math.min(PER_RUN_CAP, remainingToday);
 
   // Boot probe — explicit schema read so we get a useful error if PostgREST can't see outreach.
-  const probe = await sb.from("campaigns").select("id", { count: "exact", head: true });
+  const probe = await sb.from("outreach_campaigns").select("id", { count: "exact", head: true });
   if (probe.error) {
     console.error("[BOOT PROBE FAILED] outreach schema not reachable via PostgREST.");
     console.error("Error:", JSON.stringify(probe.error, null, 2));
@@ -71,7 +70,7 @@ async function main() {
   console.log(`[boot probe] outreach.campaigns reachable; row count=${probe.count}`);
 
   const { data: campaign, error: campaignErr } = await sb
-    .from("campaigns")
+    .from("outreach_campaigns")
     .select("*")
     .eq("active", true)
     .eq("channel", "email")
@@ -92,7 +91,7 @@ async function main() {
 
   // Eligible candidates
   const { data: agents } = await sb
-    .from("agents")
+    .from("outreach_agents")
     .select("id, email, first_name, brokerage, state")
     .eq("excluded", false)
     .is("unsubscribed_at", null)
@@ -105,7 +104,7 @@ async function main() {
   }
 
   const { data: alreadySent } = await sb
-    .from("sends")
+    .from("outreach_sends")
     .select("agent_id")
     .eq("campaign_id", campaign.id)
     .in("agent_id", agents.map((a) => a.id));
@@ -113,7 +112,7 @@ async function main() {
 
   const emails = agents.map((a) => a.email.toLowerCase().trim());
   const { data: supps } = await sb
-    .from("suppressions")
+    .from("outreach_suppressions")
     .select("email_normalized")
     .in("email_normalized", emails);
   const suppSet = new Set((supps ?? []).map((s: any) => s.email_normalized));
@@ -129,12 +128,12 @@ async function main() {
     const v = await verifyEmail(agent.email);
     if (!v.ok) {
       console.log(`SKIP ${agent.email}: verify_failed:${v.reason}`);
-      await sb.from("agents").update({ excluded: true, excluded_reason: `invalid_email_${v.reason}` }).eq("id", agent.id);
+      await sb.from("outreach_agents").update({ excluded: true, excluded_reason: `invalid_email_${v.reason}` }).eq("id", agent.id);
       continue;
     }
 
     const { data: sendRow, error: insErr } = await sb
-      .from("sends")
+      .from("outreach_sends")
       .insert({ agent_id: agent.id, campaign_id: campaign.id, channel: "email", status: "queued" })
       .select("id, track_token")
       .single();
@@ -151,7 +150,7 @@ async function main() {
 
     if (DRY) {
       console.log(`[DRY] ${agent.email} :: ${subject}\n${text}\n---`);
-      await sb.from("sends").update({ status: "failed", error: "dry_run" }).eq("id", sendRow.id);
+      await sb.from("outreach_sends").update({ status: "failed", error: "dry_run" }).eq("id", sendRow.id);
       continue;
     }
 
@@ -174,19 +173,19 @@ async function main() {
       });
       if (result.error) throw new Error(result.error.message ?? JSON.stringify(result.error));
       const messageId = result.data?.id;
-      await sb.from("sends").update({
+      await sb.from("outreach_sends").update({
         provider_message_id: messageId, status: "sent", sent_at: new Date().toISOString(),
       }).eq("id", sendRow.id);
       console.log(`SENT ${agent.email} (${messageId})`);
       sent++;
     } catch (e: any) {
       console.error(`FAIL ${agent.email}: ${e.message}`);
-      await sb.from("sends").update({ status: "failed", error: e.message }).eq("id", sendRow.id);
+      await sb.from("outreach_sends").update({ status: "failed", error: e.message }).eq("id", sendRow.id);
     }
   }
 
   if (sent > 0 && !DRY) {
-    await sb.from("send_meter").upsert(
+    await sb.from("outreach_send_meter").upsert(
       { date: today, channel: "email", sent: sentToday + sent },
       { onConflict: "date,channel" },
     );

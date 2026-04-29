@@ -47,7 +47,6 @@ const SUPABASE_SERVICE_ROLE_KEY = envOrDie("SUPABASE_SERVICE_ROLE_KEY");
 
 const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
-  db: { schema: "outreach" },
 });
 
 function pickKey(row: Record<string, any>, candidates: string[]): string | null {
@@ -149,7 +148,7 @@ async function main() {
   for (let i = 0; i < records.length; i += 500) {
     const batch = records.slice(i, i + 500);
     const { error, count } = await sb
-      .from("agents")
+      .from("outreach_agents")
       .upsert(batch, { onConflict: "email_normalized", ignoreDuplicates: true, count: "exact" });
     if (error) {
       console.error("Batch insert error:", error.message);
@@ -161,7 +160,7 @@ async function main() {
   console.log(`\nInserted/updated ${inserted}.`);
 
   const { count: totalEligible } = await sb
-    .from("agents")
+    .from("outreach_agents")
     .select("id", { count: "exact", head: true })
     .eq("excluded", false);
   console.log(`Total eligible agents in DB: ${totalEligible}`);
