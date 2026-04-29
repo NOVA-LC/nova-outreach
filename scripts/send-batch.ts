@@ -142,8 +142,13 @@ async function main() {
       continue;
     }
 
-    const trackUrl = `${APP_URL}/api/t/${sendRow.track_token}`;
-    const unsubUrl = `${APP_URL}/api/u/${sendRow.track_token}`;
+    // Direct link to /free-analysis with UTMs (no Vercel redirect needed).
+    // The existing attribution_telemetry pipeline on novaintel.io picks up the UTMs.
+    const trackUrl = `${APP_URL}/free-analysis?utm_source=cold_email&utm_medium=email&utm_campaign=${encodeURIComponent(campaign.id)}&utm_content=${encodeURIComponent(sendRow.track_token)}`;
+    // Unsub link also direct — points to a static unsub page on novaintel.io if you have one,
+    // otherwise mailto: fallback. If no /unsubscribe route exists, the List-Unsubscribe header
+    // (handled by Gmail's one-click) is still in place from lib/resend.ts.
+    const unsubUrl = `mailto:${REPLY_TO}?subject=unsubscribe%20${encodeURIComponent(sendRow.track_token)}`;
     const html = renderHtml({ firstName: agent.first_name, brokerage: agent.brokerage, state: agent.state, trackUrl, unsubUrl });
     const text = renderText({ firstName: agent.first_name, brokerage: agent.brokerage, state: agent.state, trackUrl, unsubUrl });
     const subject = pickSubject(sendRow.id);
