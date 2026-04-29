@@ -125,9 +125,16 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
-async function getCount(sb: ReturnType<typeof db>, sendId: string, col: string): Promise<number> {
+async function getCount(
+  sb: ReturnType<typeof db>,
+  sendId: string,
+  col: "open_count" | "click_count",
+): Promise<number> {
   const { data } = await sb.from("sends").select(col).eq("id", sendId).maybeSingle();
-  return ((data as any)?.[col] as number) ?? 0;
+  if (!data) return 0;
+  const row = data as Record<string, unknown>;
+  const v = row[col];
+  return typeof v === "number" ? v : 0;
 }
 
 async function isStatusBefore(sb: ReturnType<typeof db>, sendId: string, target: string): Promise<boolean> {
