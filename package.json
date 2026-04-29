@@ -16,8 +16,7 @@
     "next": "14.2.13",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "resend": "^4.0.0",
-    "pg": "^8.13.0"
+    "resend": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.16.10",
@@ -25,8 +24,7 @@
     "@types/react-dom": "^18.3.0",
     "csv-parse": "^5.5.6",
     "tsx": "^4.19.1",
-    "typescript": "^5.6.2",
-    "@types/pg": "^8.11.10"
+    "typescript": "^5.6.2"
   },
   "engines": {
     "node": ">=20"
