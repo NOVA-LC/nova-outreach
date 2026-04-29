@@ -135,7 +135,9 @@ async function fetchAndExtract(url: string): Promise<ScrapedAgent[]> {
 export const discoverScraper: Scraper = {
   name: "discover_brave",
   source: "discover_brave",
-  scrape: async (limit = 200) => {
+  scrape: async (limitArg = 200) => {
+    // Bootstrap mode: ignore caller's limit, take everything we can.
+    const limit = process.env.SCRAPE_ALL_STATES === "true" ? 2000 : limitArg;
     const key = process.env.BRAVE_SEARCH_API_KEY;
     if (!key) {
       console.log("BRAVE_SEARCH_API_KEY not set; skipping discover scraper");
