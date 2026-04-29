@@ -97,6 +97,7 @@ async function main() {
     .is("unsubscribed_at", null)
     .is("hard_bounced_at", null)
     .is("complained_at", null)
+    .order("scraped_at", { ascending: false })  // newest sources first (apollo_v1, byd_v1, etc)
     .limit(batchSize * 5);
   if (!agents || agents.length === 0) {
     console.log("No eligible agents.");
