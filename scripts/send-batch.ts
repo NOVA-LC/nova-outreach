@@ -60,7 +60,17 @@ async function main() {
   }
   const batchSize = Math.min(PER_RUN_CAP, remainingToday);
 
-  const { data: campaign } = await sb
+  // Boot probe — explicit schema read so we get a useful error if PostgREST can't see outreach.
+  const probe = await sb.from("campaigns").select("id", { count: "exact", head: true });
+  if (probe.error) {
+    console.error("[BOOT PROBE FAILED] outreach schema not reachable via PostgREST.");
+    console.error("Error:", JSON.stringify(probe.error, null, 2));
+    console.error("Fix: Supabase Dashboard → Settings → Data API → Exposed schemas → add 'outreach' → Save.");
+    process.exit(1);
+  }
+  console.log(`[boot probe] outreach.campaigns reachable; row count=${probe.count}`);
+
+  const { data: campaign, error: campaignErr } = await sb
     .from("campaigns")
     .select("*")
     .eq("active", true)
@@ -68,10 +78,17 @@ async function main() {
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (!campaign) {
-    console.error("No active email campaign. Insert one in outreach.campaigns.");
+  if (campaignErr) {
+    console.error("Campaign query error:", JSON.stringify(campaignErr, null, 2));
     process.exit(1);
   }
+  if (!campaign) {
+    console.error("No active email campaign. Run this in Supabase SQL editor:");
+    console.error("  SELECT id, name, active, channel FROM outreach.campaigns;");
+    console.error("If empty: re-insert via the migration. If rows present but query empty: schema visibility issue.");
+    process.exit(1);
+  }
+  console.log(`[campaign] ${campaign.name} (${campaign.id})`);
 
   // Eligible candidates
   const { data: agents } = await sb
