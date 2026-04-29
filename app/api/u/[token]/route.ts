@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 async function unsubscribe(token: string): Promise<{ ok: boolean; email?: string }> {
   const sb = db();
   const { data: send } = await sb
-    .from("sends")
+    .from("outreach_sends")
     .select("id, agent_id, agents:agent_id(email, email_normalized)")
     .eq("track_token", token)
     .maybeSingle();
@@ -19,11 +19,11 @@ async function unsubscribe(token: string): Promise<{ ok: boolean; email?: string
   const now = new Date().toISOString();
 
   await Promise.all([
-    sb.from("agents").update({ unsubscribed_at: now }).eq("id", send.agent_id),
-    sb.from("sends").update({ unsubscribed_at: now, status: "unsubscribed" }).eq("id", send.id),
+    sb.from("outreach_agents").update({ unsubscribed_at: now }).eq("id", send.agent_id),
+    sb.from("outreach_sends").update({ unsubscribed_at: now, status: "unsubscribed" }).eq("id", send.id),
     email
       ? sb
-          .from("suppressions")
+          .from("outreach_suppressions")
           .upsert(
             { email_normalized: email, reason: "unsubscribe", source_send_id: send.id },
             { onConflict: "email_normalized" },

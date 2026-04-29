@@ -67,12 +67,12 @@ export async function POST(req: NextRequest) {
   // Find the send row by provider_message_id.
   let sendId: string | null = null;
   if (messageId) {
-    const { data: s } = await sb.from("sends").select("id").eq("provider_message_id", messageId).maybeSingle();
+    const { data: s } = await sb.from("outreach_sends").select("id").eq("provider_message_id", messageId).maybeSingle();
     sendId = s?.id ?? null;
   }
 
   // Always log the raw event.
-  await sb.from("email_events").insert({
+  await sb.from("outreach_email_events").insert({
     send_id: sendId,
     provider_message_id: messageId,
     event_type: eventType,
@@ -119,7 +119,7 @@ export async function POST(req: NextRequest) {
       break;
   }
   if (Object.keys(updates).length > 0) {
-    await sb.from("sends").update(updates).eq("id", sendId);
+    await sb.from("outreach_sends").update(updates).eq("id", sendId);
   }
 
   return NextResponse.json({ ok: true });
@@ -130,7 +130,7 @@ async function getCount(
   sendId: string,
   col: "open_count" | "click_count",
 ): Promise<number> {
-  const { data } = await sb.from("sends").select(col).eq("id", sendId).maybeSingle();
+  const { data } = await sb.from("outreach_sends").select(col).eq("id", sendId).maybeSingle();
   if (!data) return 0;
   const row = data as Record<string, unknown>;
   const v = row[col];
@@ -139,24 +139,24 @@ async function getCount(
 
 async function isStatusBefore(sb: ReturnType<typeof db>, sendId: string, target: string): Promise<boolean> {
   const order = ["queued", "sent", "delivered", "opened", "clicked", "bounced", "complained", "failed", "unsubscribed"];
-  const { data } = await sb.from("sends").select("status").eq("id", sendId).maybeSingle();
+  const { data } = await sb.from("outreach_sends").select("status").eq("id", sendId).maybeSingle();
   const cur = data?.status ?? "queued";
   return order.indexOf(cur) < order.indexOf(target);
 }
 
 async function markBounce(sb: ReturnType<typeof db>, sendId: string) {
   const { data: s } = await sb
-    .from("sends")
-    .select("agent_id, agents:agent_id(email_normalized)")
+    .from("outreach_sends")
+    .select("agent_id, outreach_agents:agent_id(email_normalized)")
     .eq("id", sendId)
     .maybeSingle();
   if (!s) return;
-  const email = (s as any).agents?.email_normalized;
+  const email = (s as any).outreach_agents?.email_normalized;
   if (s.agent_id) {
-    await sb.from("agents").update({ hard_bounced_at: new Date().toISOString() }).eq("id", s.agent_id);
+    await sb.from("outreach_agents").update({ hard_bounced_at: new Date().toISOString() }).eq("id", s.agent_id);
   }
   if (email) {
-    await sb.from("suppressions").upsert(
+    await sb.from("outreach_suppressions").upsert(
       { email_normalized: email, reason: "hard_bounce", source_send_id: sendId },
       { onConflict: "email_normalized" },
     );
@@ -165,17 +165,17 @@ async function markBounce(sb: ReturnType<typeof db>, sendId: string) {
 
 async function markComplaint(sb: ReturnType<typeof db>, sendId: string) {
   const { data: s } = await sb
-    .from("sends")
-    .select("agent_id, agents:agent_id(email_normalized)")
+    .from("outreach_sends")
+    .select("agent_id, outreach_agents:agent_id(email_normalized)")
     .eq("id", sendId)
     .maybeSingle();
   if (!s) return;
-  const email = (s as any).agents?.email_normalized;
+  const email = (s as any).outreach_agents?.email_normalized;
   if (s.agent_id) {
-    await sb.from("agents").update({ complained_at: new Date().toISOString() }).eq("id", s.agent_id);
+    await sb.from("outreach_agents").update({ complained_at: new Date().toISOString() }).eq("id", s.agent_id);
   }
   if (email) {
-    await sb.from("suppressions").upsert(
+    await sb.from("outreach_suppressions").upsert(
       { email_normalized: email, reason: "complaint", source_send_id: sendId },
       { onConflict: "email_normalized" },
     );

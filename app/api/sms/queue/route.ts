@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
 
   // Active SMS campaign (created by bootstrap script).
   const { data: campaign } = await sb
-    .from("campaigns")
+    .from("outreach_campaigns")
     .select("*")
     .eq("active", true)
     .eq("channel", "sms")
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
 
   // Eligible agents: not excluded, has phone, not already sent this campaign.
   const { data: agents, error } = await sb
-    .from("agents")
+    .from("outreach_agents")
     .select("id, first_name, full_name, brokerage, state, phone, phone_normalized")
     .eq("excluded", false)
     .is("unsubscribed_at", null)
@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
   if (error || !agents) return NextResponse.json({ ok: false, error: error?.message }, { status: 500 });
 
   const { data: alreadySent } = await sb
-    .from("sends")
+    .from("outreach_sends")
     .select("agent_id")
     .eq("campaign_id", campaign.id)
     .eq("channel", "sms")
@@ -58,7 +58,7 @@ export async function GET(req: NextRequest) {
   const queue = [];
   for (const a of next) {
     const { data: sendRow } = await sb
-      .from("sends")
+      .from("outreach_sends")
       .insert({
         agent_id: a.id,
         campaign_id: campaign.id,

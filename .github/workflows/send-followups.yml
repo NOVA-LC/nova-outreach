@@ -1,0 +1,56 @@
+name: send-followups
+
+# Daily follow-up runner. No-ops unless at least one campaign has
+# followups_enabled = true in public.outreach_campaigns. Default off, so this
+# workflow is safe to leave scheduled — nothing fires until Tyler flips the
+# flag in Supabase.
+#
+# Cadence default: day +4 and day +11 after the prior step. Skips recipients
+# who clicked, unsubscribed, bounced, or complained.
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Max follow-ups this run (default 10)"
+        required: false
+        default: "10"
+      dry:
+        description: "Dry run (render only, don't send)"
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    # Once daily at 14:00 UTC (10 AM ET) — well within the cold-email window.
+    - cron: "0 14 * * 1-5"
+
+jobs:
+  send-followups:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: nova-send       # share lock with initial send batcher
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm install --no-audit --no-fund --silent
+      - name: Send follow-ups
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          APP_URL: ${{ vars.APP_URL }}
+          FROM_EMAIL: ${{ vars.FROM_EMAIL }}
+          FROM_NAME: ${{ vars.FROM_NAME }}
+          REPLY_TO: ${{ vars.REPLY_TO }}
+          COMPLIANCE_ADDRESS: ${{ vars.COMPLIANCE_ADDRESS }}
+          DAILY_SEND_CAP: ${{ vars.DAILY_SEND_CAP }}
+          PER_RUN_CAP: ${{ github.event.inputs.limit || '10' }}
+        run: |
+          if [ "${{ github.event.inputs.dry }}" = "true" ]; then
+            npx tsx scripts/send-followups.ts --dry --limit ${{ github.event.inputs.limit || '10' }}
+          else
+            npx tsx scripts/send-followups.ts --limit ${{ github.event.inputs.limit || '10' }}
+          fi

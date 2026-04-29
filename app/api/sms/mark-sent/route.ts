@@ -18,19 +18,19 @@ export async function POST(req: NextRequest) {
 
   const sb = db();
   if (action === "skip") {
-    await sb.from("sends").update({ status: "failed", error: "manually_skipped" }).eq("id", sendId);
+    await sb.from("outreach_sends").update({ status: "failed", error: "manually_skipped" }).eq("id", sendId);
     return NextResponse.json({ ok: true, skipped: true });
   }
 
-  await sb.from("sends").update({
+  await sb.from("outreach_sends").update({
     status: "sent",
     sent_at: new Date().toISOString(),
   }).eq("id", sendId);
 
   // Bump the SMS meter.
   const today = new Date().toISOString().slice(0, 10);
-  const { data: meter } = await sb.from("send_meter").select("sent").eq("date", today).eq("channel", "sms").maybeSingle();
-  await sb.from("send_meter").upsert(
+  const { data: meter } = await sb.from("outreach_send_meter").select("sent").eq("date", today).eq("channel", "sms").maybeSingle();
+  await sb.from("outreach_send_meter").upsert(
     { date: today, channel: "sms", sent: (meter?.sent ?? 0) + 1 },
     { onConflict: "date,channel" },
   );

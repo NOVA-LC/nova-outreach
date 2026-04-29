@@ -14,7 +14,7 @@ export async function GET(req: NextRequest, ctx: { params: { token: string } }) 
   const sb = db();
   // Find the send so we can attribute the click.
   const { data: send } = await sb
-    .from("sends")
+    .from("outreach_sends")
     .select("id, campaign_id")
     .eq("track_token", token)
     .maybeSingle();
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest, ctx: { params: { token: string } }) 
 
   // Best-effort logging (don't await heavy work)
   if (send) {
-    sb.from("link_clicks")
+    sb.from("outreach_link_clicks")
       .insert({
         send_id: send.id,
         track_token: token,
@@ -45,7 +45,7 @@ export async function GET(req: NextRequest, ctx: { params: { token: string } }) 
         referer: ref,
       })
       .then(() => null);
-    sb.from("sends")
+    sb.from("outreach_sends")
       .update({
         first_click_at: new Date().toISOString(),
         status: "clicked",
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest, ctx: { params: { token: string } }) 
       .then(() => null);
   } else {
     // Unknown token — still log for debugging.
-    sb.from("link_clicks")
+    sb.from("outreach_link_clicks")
       .insert({
         send_id: null,
         track_token: token,
