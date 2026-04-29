@@ -2,19 +2,9 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "buildCommand": "next build",
-  "crons": [
-    {
-      "path": "/api/cron/send-batch",
-      "schedule": "0,30 13-22 * * 1-5"
-    },
-    {
-      "path": "/api/cron/scrape",
-      "schedule": "0 6 * * *"
-    }
-  ],
   "functions": {
-    "app/api/cron/send-batch/route.ts": { "maxDuration": 60 },
-    "app/api/cron/scrape/route.ts":     { "maxDuration": 60 },
-    "app/api/webhook/resend/route.ts":  { "maxDuration": 10 }
+    "app/api/webhook/resend/route.ts": { "maxDuration": 10 },
+    "app/api/t/[token]/route.ts":      { "maxDuration": 5 },
+    "app/api/u/[token]/route.ts":      { "maxDuration": 5 }
   }
 }
