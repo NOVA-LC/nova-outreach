@@ -138,7 +138,51 @@ Want to see the moments your last call should've forced a choice instead of an e
 <p>— Tyler</p>`,
 };
 
-export const VARIANTS: Variant[] = [v1, v2, v3, v4, v5];
+// V6 — the lead you can't stop thinking about (uncanny / "called out")
+const v6: Variant = {
+  subject: "the lead you can't stop thinking about",
+  text: ({ firstName, trackUrl }) => `${greeting(firstName)}
+
+Every agent has 1 or 2 from this week. The lead you keep mentally re-running. "Was it when I said the price? Should I have pushed back on the spouse thing? Did I call too early?"
+
+Most agents guess. They guess wrong.
+
+The break is almost always 6–10 minutes earlier than where you think — usually a question you skipped that left a hole the rest of the call couldn't recover from.
+
+You can find the exact moment in 60 seconds. Free first one: ${trackUrl}
+
+— Tyler`,
+  html: ({ firstName, trackUrl }) => `<p>${greeting(firstName)}</p>
+<p>Every agent has 1 or 2 from this week. The lead you keep mentally re-running. <em>"Was it when I said the price? Should I have pushed back on the spouse thing? Did I call too early?"</em></p>
+<p>Most agents guess. They guess wrong.</p>
+<p>The break is almost always 6–10 minutes earlier than where you think — usually a question you skipped that left a hole the rest of the call couldn't recover from.</p>
+<p>You can find the exact moment in 60 seconds. Free first one:<br><a href="${trackUrl}" style="color:#1d4ed8;">${trackUrl}</a></p>
+<p>— Tyler</p>`,
+};
+
+// V7 — you already know what you should've said (inner-monologue callout)
+const v7: Variant = {
+  subject: "you already know what you should've said",
+  text: ({ firstName, trackUrl }) => `${greeting(firstName)}
+
+The hardest part of selling life insurance: you walk away from a lost call already knowing the line you should've used. You just couldn't pull it in the moment.
+
+That gap between knowing and doing is the whole game.
+
+It's almost never a script problem. It's a pattern — you skip the same question every time, freeze at the same objection every time, drop price at the same wrong moment every time. Invisible from the inside.
+
+Once you see your pattern on paper, it gets fixable. First one's free: ${trackUrl}
+
+— Tyler`,
+  html: ({ firstName, trackUrl }) => `<p>${greeting(firstName)}</p>
+<p>The hardest part of selling life insurance: you walk away from a lost call already knowing the line you should've used. You just couldn't pull it in the moment.</p>
+<p>That gap between knowing and doing is the whole game.</p>
+<p>It's almost never a script problem. It's a pattern — you skip the same question every time, freeze at the same objection every time, drop price at the same wrong moment every time. Invisible from the inside.</p>
+<p>Once you see your pattern on paper, it gets fixable. First one's free:<br><a href="${trackUrl}" style="color:#1d4ed8;">${trackUrl}</a></p>
+<p>— Tyler</p>`,
+};
+
+export const VARIANTS: Variant[] = [v1, v2, v3, v4, v5, v6, v7];
 
 export function pickVariant(seed: string | number): Variant {
   let h = 0;
