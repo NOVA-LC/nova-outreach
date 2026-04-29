@@ -124,7 +124,7 @@ async function fetchAndExtract(url: string): Promise<ScrapedAgent[]> {
     const dom = email.split("@")[1] ?? "";
     if (BAD_DOMAINS.has(dom)) continue;
     // Drop obvious non-agents (vendor emails, system addresses).
-    if (/^(info|support|contact|admin|sales|hello|noreply|no-reply)@/.test(email)) continue;
+    if (/^(info|support|contact|admin|sales|hello|hi|noreply|no-reply|submissions?|agency|insurance|claims|billing|accounts?|accounting|marketing|media|press|careers|jobs|hr|office|mail|customerservice|customer|service|help|team|ask|inquir(y|ies)|quotes?|quoting|get(started)?|request|reception|frontdesk|main|general|enroll(ment)?)@/.test(email)) continue;
     seen.add(email);
     out.push({ email, full_name: title || null, source_url: url, raw_payload: { context: "text", title } });
   }

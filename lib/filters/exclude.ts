@@ -123,12 +123,23 @@ export interface ExclusionResult {
   detail?: string;
 }
 
+
+// Generic role-based local parts. We only want to message individuals;
+// shared inboxes (info@, submissions@, quotes@, agency@, etc.) are
+// switchboards that route mail to whoever is on duty — not the actual agent.
+const ROLE_LOCAL_RE = /^(info|support|contact|admin|sales|hello|hi|noreply|no-reply|submissions?|agency|insurance|claims|billing|accounts?|accounting|marketing|media|press|careers|jobs|hr|office|mail|customerservice|customer|service|help|team|ask|inquir(y|ies)|quotes?|quoting|get(started)?|request|reception|frontdesk|main|general|enroll(ment)?)@/i;
+
 export function classify(agent: AgentLike): ExclusionResult {
   if (!agent.email || !/^.+@.+\..+$/.test(agent.email)) {
     return { excluded: true, reason: "missing_email" };
   }
   const email = agent.email.toLowerCase().trim();
   const domain = email.split("@")[1] ?? "";
+
+  // Drop role addresses (shared inboxes): info@, submissions@, quotes@, etc.
+  if (ROLE_LOCAL_RE.test(email)) {
+    return { excluded: true, reason: "role_filter", detail: email.split("@")[0] };
+  }
 
   if (TORCHMARK_DOMAINS.has(domain)) {
     return { excluded: true, reason: "torchmark_family", detail: `domain:${domain}` };
