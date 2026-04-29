@@ -5,9 +5,9 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const sb = db();
-  const { data: rows } = await sb.from("daily_funnel").select("*").limit(14);
-  const { data: meterEmail } = await sb.from("send_meter").select("*").eq("channel", "email").order("date", { ascending: false }).limit(7);
-  const { data: agentCount } = await sb.from("agents").select("id", { count: "exact", head: true }).eq("excluded", false);
+  const { data: rows } = await sb.from("outreach_daily_funnel").select("*").limit(14);
+  const { data: meterEmail } = await sb.from("outreach_send_meter").select("*").eq("channel", "email").order("date", { ascending: false }).limit(7);
+  const { data: agentCount } = await sb.from("outreach_agents").select("id", { count: "exact", head: true }).eq("excluded", false);
 
   return (
     <main style={{ padding: 24, maxWidth: 920, margin: "0 auto" }}>
