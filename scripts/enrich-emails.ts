@@ -23,7 +23,7 @@
  * Env required: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OUTSCRAPER_API_KEY
  */
 import { createClient } from "@supabase/supabase-js";
-import { findEmailsForDomain } from "../lib/scrapers/outscraper_emails";
+import { findEmailsForBatch, findEmailsForDomain } from "../lib/scrapers/outscraper_emails";
 import { classify } from "../lib/filters/exclude";
 
 function envOrDie(name: string): string {
@@ -143,41 +143,51 @@ async function main() {
   const records: any[] = [];
   let domainOK = 0, domainErr = 0, emailsFound = 0;
 
-  for (const domain of domains) {
+  // Outscraper's emails-and-contacts is async-only. We batch up to 25 domains
+  // per job to keep the wallclock down — 1 poll cycle per 25 domains instead
+  // of one per domain.
+  let perDomain: Map<string, any[]>;
+  if (SINGLE_DOMAIN) {
+    const agents = await findEmailsForDomain(domains[0], OUTSCRAPER_API_KEY);
+    perDomain = new Map([[domains[0], agents]]);
+    domainOK = 1;
+  } else {
     try {
-      const agents = await findEmailsForDomain(domain, OUTSCRAPER_API_KEY);
-      domainOK++;
-      console.log(`  ${domain}: ${agents.length} email(s)`);
-      for (const a of agents) {
-        const cls = classify(a);
-        if (cls.excluded) continue; // role/captive/carrier — skip
-        emailsFound++;
-        records.push({
-          email: a.email,
-          first_name: a.first_name ?? null,
-          last_name: a.last_name ?? null,
-          full_name: a.full_name ?? null,
-          phone: a.phone ?? null,
-          phone_normalized: normalizePhone(a.phone ?? null),
-          brokerage: a.brokerage ?? null,
-          agency: a.agency ?? null,
-          city: a.city ?? null,
-          state: a.state ?? null,
-          zip: a.zip ?? null,
-          carriers: a.carriers ?? null,
-          source: "outscraper_emails",
-          source_url: a.source_url ?? null,
-          raw_payload: a.raw_payload ?? a,
-          excluded: false,
-          excluded_reason: null,
-        });
-      }
+      perDomain = await findEmailsForBatch(domains, OUTSCRAPER_API_KEY, 25);
+      domainOK = domains.length;
     } catch (e: any) {
-      domainErr++;
-      console.warn(`  ${domain}: ERR ${e.message ?? e}`);
+      console.error(`batch enrichment failed: ${e.message ?? e}`);
+      perDomain = new Map();
+      domainErr = domains.length;
     }
-    // Modest courtesy delay so we don't hammer the API.
-    await new Promise((r) => setTimeout(r, 250));
+  }
+
+  for (const [domain, agents] of perDomain) {
+    console.log(`  ${domain}: ${agents.length} email(s)`);
+    for (const a of agents) {
+      const cls = classify(a);
+      if (cls.excluded) continue; // role/captive/carrier — skip
+      emailsFound++;
+      records.push({
+        email: a.email,
+        first_name: a.first_name ?? null,
+        last_name: a.last_name ?? null,
+        full_name: a.full_name ?? null,
+        phone: a.phone ?? null,
+        phone_normalized: normalizePhone(a.phone ?? null),
+        brokerage: a.brokerage ?? null,
+        agency: a.agency ?? null,
+        city: a.city ?? null,
+        state: a.state ?? null,
+        zip: a.zip ?? null,
+        carriers: a.carriers ?? null,
+        source: "outscraper_emails",
+        source_url: a.source_url ?? null,
+        raw_payload: a.raw_payload ?? a,
+        excluded: false,
+        excluded_reason: null,
+      });
+    }
   }
 
   console.log(`\n${domainOK}/${domains.length} domains succeeded (${domainErr} errors). ${emailsFound} eligible emails after filter.`);

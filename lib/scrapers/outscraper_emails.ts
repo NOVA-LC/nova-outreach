@@ -1,23 +1,20 @@
 // Outscraper Email & Contact Finder.
 //
-// Given an agency website domain, this hits Outscraper's emails-and-contacts
-// endpoint (synchronous mode for simplicity) and returns ScrapedAgent records
-// for each PERSONAL email it finds — typically firstname@, firstname.lastname@,
-// flastname@ patterns published somewhere on the site (about/team/contact pages).
+// Async + batched: Outscraper's emails-and-contacts endpoint runs as a job.
+// Sync mode (`async=false`) silently returns no data on this endpoint, so we
+// always start a job and poll results_location until status === "Success".
 //
-// What this is NOT:
-//   - A full pattern guesser. It only returns emails Outscraper actually saw
-//     on the public web. No SMTP probing, no "guess and verify".
-//   - A directory of agents. We seed it with domains we already know about.
-//
-// Cost: ~$0.001-$0.01 per domain.
-// Free tier on signup typically covers the first ~50-100 lookups.
+// We batch up to 25 domains per job — Outscraper accepts repeated `query`
+// params so 25 lookups become 1 HTTP roundtrip + 1 poll cycle. Drastically
+// cheaper on time vs. 1 job per domain.
 
 import type { ScrapedAgent } from "./types";
 
 const OUTSCRAPER_API_BASE = "https://api.app.outscraper.com";
+const POLL_INTERVAL_MS = 4000;
+const POLL_TIMEOUT_MS = 6 * 60 * 1000;   // 6 min — large batches can take a while
+const DEFAULT_BATCH_SIZE = 25;
 
-// One row per domain; emails come back as parallel email_1..email_n fields.
 interface OutscraperContactRow {
   site?: string;
   domain?: string;
@@ -37,72 +34,163 @@ interface OutscraperContactRow {
   twitter?: string;
 }
 
-async function outscraperRequest(path: string, params: Record<string, string | number>, apiKey: string): Promise<any> {
-  const u = new URL(OUTSCRAPER_API_BASE + path);
-  for (const [k, v] of Object.entries(params)) u.searchParams.set(k, String(v));
+interface AsyncStartResp {
+  id?: string;
+  status?: string;
+  results_location?: string;
+  data?: any;
+}
+
+interface AsyncPollResp {
+  id?: string;
+  status?: string;     // "Pending" | "Success" | "Failed"
+  data?: any[][] | any[] | null;
+  results_location?: string;
+}
+
+async function startBatchJob(domains: string[], apiKey: string): Promise<AsyncStartResp> {
+  // Outscraper accepts repeated `query` params for batch jobs.
+  const u = new URL(`${OUTSCRAPER_API_BASE}/emails-and-contacts`);
+  for (const d of domains) u.searchParams.append("query", d);
+  u.searchParams.set("async", "true");
   const res = await fetch(u.toString(), {
-    headers: { "X-API-KEY": apiKey, "accept": "application/json" },
-    signal: AbortSignal.timeout(180_000),
+    method: "GET",
+    headers: { "X-API-KEY": apiKey, accept: "application/json" },
+    signal: AbortSignal.timeout(60_000),
   });
-  if (!res.ok) {
-    throw new Error(`Outscraper ${path} -> HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (res.status !== 200 && res.status !== 202) {
+    throw new Error(`emails-and-contacts start ${res.status}: ${(await res.text()).slice(0, 300)}`);
   }
   return res.json();
 }
 
-/**
- * Fetch personal emails for one domain.
- * Outscraper's sync mode returns: { data: [ [{site, email_1, ...}] ] }
- * (one inner array per query — we send one query at a time).
- */
-export async function findEmailsForDomain(domain: string, apiKey: string): Promise<ScrapedAgent[]> {
-  const data = await outscraperRequest("/emails-and-contacts", {
-    query: domain,
-    async: "false",
-  }, apiKey);
-
-  // Flatten the nested-array response shape.
-  const rows: OutscraperContactRow[] = [];
-  for (const group of data?.data ?? []) {
-    if (Array.isArray(group)) rows.push(...group);
-    else if (group && typeof group === "object") rows.push(group);
-  }
-  if (rows.length === 0) return [];
-
-  const out: ScrapedAgent[] = [];
-  for (const row of rows) {
-    const site = row.site || row.domain || row.query || domain;
-    for (let i = 1; i <= 6; i++) {
-      const email = (row as any)[`email_${i}`] as string | undefined;
-      if (!email) continue;
-      const cleaned = email.trim().toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned)) continue;
-
-      const fullName = ((row as any)[`email_${i}_full_name`] as string | undefined)?.trim() || null;
-      const position = ((row as any)[`email_${i}_position`] as string | undefined)?.trim() || null;
-      const [first, ...rest] = (fullName ?? "").split(/\s+/).filter(Boolean);
-      const last = rest.length ? rest[rest.length - 1] : null;
-
-      out.push({
-        email: cleaned,
-        first_name: first || null,
-        last_name: last || null,
-        full_name: fullName,
-        phone: (row.phone_1 ?? row.phone_2 ?? row.phone_3 ?? null)?.trim() || null,
-        brokerage: null,        // domain-level — caller can backfill
-        agency: null,
-        source_url: site || null,
-        raw_payload: {
-          provider: "outscraper_emails",
-          position,
-          facebook: row.facebook ?? null,
-          instagram: row.instagram ?? null,
-          linkedin: row.linkedin ?? null,
-          twitter: row.twitter ?? null,
-          domain_queried: domain,
-        },
-      });
+async function pollJob(resultsUrl: string, apiKey: string): Promise<AsyncPollResp> {
+  const start = Date.now();
+  let lastStatus = "Pending";
+  while (Date.now() - start < POLL_TIMEOUT_MS) {
+    const res = await fetch(resultsUrl, {
+      headers: { "X-API-KEY": apiKey, accept: "application/json" },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (res.ok) {
+      const json = (await res.json()) as AsyncPollResp;
+      lastStatus = json.status ?? "?";
+      const status = lastStatus.toLowerCase();
+      if (status === "success") return json;
+      if (status === "failed" || status === "error") {
+        throw new Error(`outscraper job failed: ${JSON.stringify(json).slice(0, 300)}`);
+      }
+    } else if (res.status >= 500 || res.status === 404) {
+      // transient
+    } else {
+      throw new Error(`poll ${res.status}: ${(await res.text()).slice(0, 200)}`);
     }
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+  }
+  throw new Error(`poll timed out (${Math.round(POLL_TIMEOUT_MS / 1000)}s, last status=${lastStatus})`);
+}
+
+function flattenRows(resp: AsyncPollResp): OutscraperContactRow[] {
+  const rows: OutscraperContactRow[] = [];
+  const d: any = resp.data;
+  if (!d) return rows;
+  if (Array.isArray(d) && d.length && Array.isArray(d[0])) {
+    for (const inner of d as any[][]) for (const row of inner) rows.push(row as OutscraperContactRow);
+  } else if (Array.isArray(d)) {
+    for (const row of d as any[]) rows.push(row as OutscraperContactRow);
+  }
+  return rows;
+}
+
+function rowToAgents(row: OutscraperContactRow, fallbackDomain: string): ScrapedAgent[] {
+  const site = row.site || row.domain || row.query || fallbackDomain;
+  const out: ScrapedAgent[] = [];
+  for (let i = 1; i <= 6; i++) {
+    const email = (row as any)[`email_${i}`] as string | undefined;
+    if (!email) continue;
+    const cleaned = email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned)) continue;
+
+    const fullName = ((row as any)[`email_${i}_full_name`] as string | undefined)?.trim() || null;
+    const position = ((row as any)[`email_${i}_position`] as string | undefined)?.trim() || null;
+    const [first, ...rest] = (fullName ?? "").split(/\s+/).filter(Boolean);
+    const last = rest.length ? rest[rest.length - 1] : null;
+
+    out.push({
+      email: cleaned,
+      first_name: first || null,
+      last_name: last || null,
+      full_name: fullName,
+      phone: (row.phone_1 ?? row.phone_2 ?? row.phone_3 ?? null)?.trim() || null,
+      brokerage: null,
+      agency: null,
+      source_url: site || null,
+      raw_payload: {
+        provider: "outscraper_emails",
+        position,
+        facebook: row.facebook ?? null,
+        instagram: row.instagram ?? null,
+        linkedin: row.linkedin ?? null,
+        twitter: row.twitter ?? null,
+        domain_queried: row.query ?? fallbackDomain,
+      },
+    });
   }
   return out;
+}
+
+/**
+ * Process a batch of up to N domains in one Outscraper job.
+ * Returns a Map<domain, ScrapedAgent[]> so the caller can log per-domain counts.
+ */
+export async function findEmailsForBatch(
+  domains: string[],
+  apiKey: string,
+  batchSize: number = DEFAULT_BATCH_SIZE,
+): Promise<Map<string, ScrapedAgent[]>> {
+  const result = new Map<string, ScrapedAgent[]>();
+  for (const d of domains) result.set(d, []);
+
+  for (let i = 0; i < domains.length; i += batchSize) {
+    const slice = domains.slice(i, i + batchSize);
+    let init: AsyncStartResp;
+    try {
+      init = await startBatchJob(slice, apiKey);
+    } catch (e: any) {
+      console.warn(`  batch start failed (${slice.length} domains): ${e.message}`);
+      continue;
+    }
+    if (!init.results_location) {
+      console.warn(`  no results_location for batch ${i}-${i + slice.length}: ${JSON.stringify(init).slice(0, 200)}`);
+      continue;
+    }
+    let final: AsyncPollResp;
+    try {
+      final = await pollJob(init.results_location, apiKey);
+    } catch (e: any) {
+      console.warn(`  batch poll failed: ${e.message}`);
+      continue;
+    }
+    const rows = flattenRows(final);
+    // Rows are returned in query-order. Match each row to its source domain.
+    for (let k = 0; k < rows.length; k++) {
+      const row = rows[k];
+      const fallback = slice[k] ?? slice[0];
+      const agents = rowToAgents(row, fallback);
+      const key = (row.query ?? fallback).toLowerCase();
+      const list = result.get(key) ?? result.get(fallback) ?? [];
+      list.push(...agents);
+      if (!result.has(key)) result.set(key, list);
+      else result.set(key, list);
+    }
+  }
+  return result;
+}
+
+/**
+ * Single-domain convenience wrapper for the --domain CLI flag.
+ */
+export async function findEmailsForDomain(domain: string, apiKey: string): Promise<ScrapedAgent[]> {
+  const m = await findEmailsForBatch([domain], apiKey, 1);
+  return m.get(domain) ?? [];
 }
